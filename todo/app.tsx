@@ -1,3 +1,4 @@
+import { ActionMenu } from "./action-menu";
 // bb-plugin-todo — the Todo page in the BB sidebar.
 //
 // Lists open tasks grouped by project and sorted by priority, with a project
@@ -13,6 +14,7 @@ import {
   useRpc,
 } from "@get-bb/plugin-sdk/app";
 import type { Priority, rpcContract, Todo } from "./server";
+import { TaskDetails } from "./details";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
@@ -80,80 +82,24 @@ function TodoRow({
 }) {
   const navigate = useBbNavigate();
   const [open, setOpen] = useState(false);
-  const hasNotes = todo.notes !== "";
-  return (
-    <li className="py-2.5 text-sm">
-      <div className="flex items-start gap-3">
-        <Checkbox
-          className="mt-0.5"
-          checked={todo.done}
-          onCheckedChange={(checked) => onUpdate({ done: checked === true })}
-          aria-label={`${todo.done ? "Вернуть" : "Выполнить"} «${todo.title}»`}
-        />
-        <button
-          type="button"
-          className="mt-0.5 flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          title={`${PRIORITY_LABEL[todo.priority]} — нажми, чтобы сменить`}
-          aria-label={`Приоритет: ${PRIORITY_LABEL[todo.priority]}. Сменить`}
-          onClick={() => onUpdate({ priority: nextPriority(todo.priority) })}
-          disabled={todo.done}
-        >
-          <PriorityDot priority={todo.priority} />
-        </button>
-        <div className="min-w-0 flex-1">
-          <button
-            type="button"
-            className={cn(
-              "block w-full text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-              hasNotes ? "cursor-pointer" : "cursor-default",
-              todo.done && "text-muted-foreground line-through",
-            )}
-            aria-expanded={hasNotes ? open : undefined}
-            onClick={() => hasNotes && setOpen((value) => !value)}
-          >
-            <span className="break-words">{todo.title}</span>
-            {hasNotes ? (
-              <Icon
-                name={open ? "ChevronUp" : "ChevronDown"}
-                className="ml-1 inline size-3.5 align-[-2px] text-muted-foreground"
-              />
-            ) : null}
-          </button>
-          {hasNotes && !open ? (
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">{todo.notes}</p>
-          ) : null}
-          {hasNotes && open ? (
-            <p className="mt-1.5 whitespace-pre-wrap break-words rounded-md bg-muted/50 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-              {todo.notes}
-            </p>
-          ) : null}
-        </div>
-        <span className="mt-0.5 hidden shrink-0 text-xs text-muted-foreground sm:inline">
-          {formatDate(todo.done && todo.doneAt !== null ? todo.doneAt : todo.createdAt)}
-        </span>
-        {todo.threadId !== null ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="-my-1 size-7 shrink-0 text-muted-foreground hover:text-foreground"
-            aria-label="Открыть исходную сессию"
-            onClick={() => navigate.toThread(todo.threadId!)}
-          >
-            <Icon name="MessageSquare" className="size-4" />
-          </Button>
-        ) : null}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="-my-1 size-7 shrink-0 text-muted-foreground hover:text-foreground"
-          aria-label={`Удалить «${todo.title}»`}
-          onClick={onRemove}
-        >
-          <Icon name="Trash2" className="size-4" />
-        </Button>
-      </div>
-    </li>
-  );
+  const [dragging, setDragging] = useState(false);
+  return <li className={cn("my-3 rounded-xl border border-border bg-card p-5 text-sm transition-colors", dragging && "ring-2 ring-primary bg-primary/5")}
+    onDragOver={e => {e.preventDefault(); setDragging(true);setOpen(true);}}
+    onDragLeave={e => {if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);}}
+    onDrop={e => {e.preventDefault();setDragging(false); if (!(e.target as HTMLElement).closest('[aria-label="Карточка задачи"]')) window.dispatchEvent(new CustomEvent(`todo-files-${todo.id}`,{detail:Array.from(e.dataTransfer.files)}));}}>
+    <div className="flex items-center gap-3">
+      <Checkbox checked={todo.done} onCheckedChange={checked => onUpdate({done:checked === true})} aria-label={`${todo.done ? "Вернуть" : "Выполнить"} «${todo.title}»`}/>
+      <button className={cn("min-w-0 text-left flex-1 font-normal text-sm break-words",todo.done && "line-through text-muted-foreground")} onClick={() => setOpen(value => !value)}>{todo.title}</button>
+      <button type="button" disabled={todo.done} aria-label={`Приоритет: ${PRIORITY_LABEL[todo.priority]}. Сменить`} title="Нажмите, чтобы сменить приоритет" onClick={() => onUpdate({priority:nextPriority(todo.priority)})} className="inline-flex shrink-0 items-center gap-2 rounded-full bg-muted px-2.5 py-1 text-xs disabled:opacity-60"><PriorityDot priority={todo.priority}/>{todo.done ? "Выполнено" : PRIORITY_LABEL[todo.priority]}</button>
+      <Button variant="ghost" size="icon" aria-label={open ? "Свернуть задачу" : "Развернуть задачу"} aria-expanded={open} onClick={() => setOpen(value => !value)}><Icon name={open ? "ChevronUp" : "ChevronDown"} className="size-4"/></Button>
+      <ActionMenu><summary aria-label="Действия задачи" className="list-none cursor-pointer px-2 text-lg text-muted-foreground">⋯</summary><div className="absolute right-0 z-20 min-w-40 rounded-md border bg-card p-1 shadow-md">
+        <Button variant="ghost" disabled={todo.done} onClick={() => onUpdate({priority:nextPriority(todo.priority)})}>Приоритет: {PRIORITY_LABEL[todo.priority]}</Button>
+        {todo.threadId && <Button variant="ghost" onClick={() => navigate.toThread(todo.threadId!)}>Открыть сессию</Button>}
+        <Button variant="ghost" onClick={onRemove}>Удалить задачу</Button>
+      </div></ActionMenu>
+    </div>
+    <div className={cn("mt-5 border-t border-border pt-5",!open && "hidden")}><TaskDetails id={todo.id}/></div>
+  </li>;
 }
 
 function EmptyState({ children }: { children: ReactNode }) {
@@ -264,7 +210,7 @@ function TodosPage() {
     rpc.call("todos_remove", { id }).then(refetch, report);
   };
   const renderRows = (items: Todo[]) => (
-    <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card px-4">
+    <ul className="">
       {items.map((todo) => (
         <TodoRow
           key={todo.id}
@@ -277,7 +223,8 @@ function TodosPage() {
   );
 
   return (
-    <div className="h-full min-h-0 flex-1 overflow-y-auto">
+    <div className="relative isolate h-full min-h-0 flex-1 overflow-hidden">
+      <div className="h-full overflow-y-auto">
       <div className="mx-auto box-border w-full max-w-3xl space-y-4 px-4 pb-6 pt-3 md:px-5 md:pt-4">
         <form onSubmit={add} className="flex flex-wrap items-center gap-2">
           <Input
@@ -388,6 +335,8 @@ function TodosPage() {
           </section>
         ) : null}
       </div>
+      </div>
+      <div data-todo-preview-root className="pointer-events-none absolute inset-0 z-50"/>
     </div>
   );
 }

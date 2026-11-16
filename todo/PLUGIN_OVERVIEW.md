@@ -1,15 +1,17 @@
-A personal todo list for work you want to do later, properly, at your
-computer.
+## Task cards
 
-## What you get
+A personal list grouped by project and priority. Expand a task to edit its
+description, open links, add dated comments and attach files up to 5 MiB.
+Comments can be edited or removed. Files are stored in the plugin database
+and downloaded through the browser.
 
-- A **Todo** page in the left sidebar: tasks grouped by project, sorted by
-  priority, with a project filter, quick add, and a collapsed done section.
-- In any thread, say «поставь это в туду» — the agent adds the task with the
-  context you need later and a link back to that thread.
-- A `bb todo` command for the terminal.
+## Agent tools
 
-## How it works
+Use `todo_add` and `todo_list` for tasks, `todo_details` to read a card,
+`todo_comment` to add a comment and `todo_attach` to attach base64 file data.
+The existing `bb todo` commands remain available.
 
-Tasks live in this plugin's SQLite database on the BB server. Nothing leaves
-the machine.
+## Storage
+
+Existing tasks are preserved through additive SQLite migrations. Deleting a
+task deletes its comments and attachments. No external service is required.

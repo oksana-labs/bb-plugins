@@ -1,0 +1,40 @@
+import assert from 'node:assert/strict';
+import { createFakePluginHost } from '@get-bb/plugin-sdk/testing';
+import plugin from './server.ts';
+import { execFileSync } from 'node:child_process';
+const original = execFileSync('git', ['show', 'e364da30d192f27aa2f4b5c9d94eb6b23a0a0dd0:todo/server.ts'], {encoding:'utf8'});
+// Register the released migration first, seed old data, then reload new code.
+const {writeFile, unlink} = await import('node:fs/promises');
+await writeFile('./.original-test.ts', original);
+const old = (await import('./.original-test.ts')).default;
+let host = createFakePluginHost({pluginId: 'todo'});
+try {
+ await old(host.bb);
+ const task = await host.harness.behavior.callRpc('todos_add', {title:'Existing task',project:'Inbox',priority:'high'});
+ await host.harness.behavior.callRpc('todos_update', {id:task.id,notes:'Original notes https://example.com'});
+ host = await host.harness.lifecycle.reload(plugin);
+ const rpc = (method,input) => host.harness.behavior.callRpc(method,input);
+ let card = await rpc('todos_details',{id:task.id});
+ assert.equal(card.todo.notes,'Original notes https://example.com');
+ assert.equal(card.todo.priority,'high');
+ assert.deepEqual(card.comments,[]);
+ await rpc('todos_update',{id:task.id,notes:''});
+ const comment = await rpc('comments_add',{todoId:task.id,text:'Comment https://example.com'});
+ await rpc('comments_edit',{id:comment.id,text:'Edited'});
+ const content = Buffer.from('attachment bytes\0\xff');
+ const attachment = await rpc('attachments_add',{todoId:task.id,name:'test.bin',data:content.toString('base64')});
+ assert.deepEqual(Buffer.from((await rpc('attachments_get',{id:attachment.id})).data,'base64'), content);
+ card = await rpc('todos_details',{id:task.id});
+ assert.equal(card.comments[0].text,'Edited');
+ assert.equal(card.attachments[0].size, content.length);
+ assert.equal(card.attachments[0].data, undefined);
+ await assert.rejects(rpc('comments_add',{todoId:'missing',text:'bad'}));
+ await assert.rejects(rpc('attachments_add',{todoId:task.id,name:'bad',data:'not base64!'}));
+ await assert.rejects(rpc('attachments_add',{todoId:task.id,name:'big',data:Buffer.alloc(5*1024*1024+1).toString('base64')}));
+ host = await host.harness.lifecycle.reload(plugin);
+ assert.equal((await host.harness.behavior.callRpc('todos_details',{id:task.id})).comments.length,1);
+ await host.harness.behavior.callRpc('todos_remove',{id:task.id});
+ await assert.rejects(host.harness.behavior.callRpc('attachments_get',{id:attachment.id}));
+ assert.equal(host.bb.storage.database().prepare('SELECT count(*) AS n FROM todo_comments').get().n,0);
+ console.log('PASS: old task migration, comments, attachment bytes, validation, reload, cascade deletion');
+} finally { await host.harness.lifecycle.dispose(); await unlink('./.original-test.ts'); }

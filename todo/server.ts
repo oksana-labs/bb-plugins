@@ -35,7 +35,24 @@ const titleSchema = z.string().trim().min(1).max(300);
 const notesSchema = z.string().trim().max(4000);
 const projectSchema = z.string().trim().min(1).max(80);
 
+const commentSchema = z.object({ id: z.string(), todoId: z.string(), text: z.string(), createdAt: z.string() });
+const attachmentSchema = z.object({ id: z.string(), todoId: z.string(), name: z.string(), size: z.number(), createdAt: z.string() });
+export type Comment = z.infer<typeof commentSchema>;
+export type Attachment = z.infer<typeof attachmentSchema>;
+const commentText = z.string().trim().min(1).max(10000);
+const fileInput = z.object({
+  todoId: z.string(), name: z.string().trim().min(1).max(255),
+  data: z.string().max(6990508).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+});
+
 export const rpcContract = defineRpcContract({
+  todos_details: { input: z.object({ id: z.string() }), output: z.object({ todo: todoSchema, comments: z.array(commentSchema), attachments: z.array(attachmentSchema) }) },
+  comments_add: { input: z.object({ todoId: z.string(), text: commentText }), output: commentSchema },
+  comments_edit: { input: z.object({ id: z.string(), text: commentText }), output: z.object({ ok: z.boolean() }) },
+  comments_remove: { input: z.object({ id: z.string() }), output: z.object({ ok: z.boolean() }) },
+  attachments_add: { input: fileInput, output: attachmentSchema },
+  attachments_get: { input: z.object({ id: z.string() }), output: z.object({ name: z.string(), data: z.string() }) },
+  attachments_remove: { input: z.object({ id: z.string() }), output: z.object({ ok: z.boolean() }) },
   todos_list: {
     input: z.null(),
     output: z.object({ todos: z.array(todoSchema) }),
@@ -45,6 +62,7 @@ export const rpcContract = defineRpcContract({
       title: titleSchema,
       project: projectSchema,
       priority: prioritySchema,
+      notes: notesSchema.optional(),
     }),
     output: todoSchema,
   },
@@ -114,6 +132,10 @@ export default async function plugin(bb: BbPluginApi) {
       done_at TEXT,
       thread_id TEXT
     )`,
+    `CREATE TABLE todo_comments (id TEXT PRIMARY KEY, todoId TEXT NOT NULL REFERENCES todos(id) ON DELETE CASCADE, text TEXT NOT NULL, createdAt TEXT NOT NULL)`,
+    `CREATE INDEX todo_comments_task ON todo_comments(todoId, createdAt)`,
+    `CREATE TABLE todo_attachments (id TEXT PRIMARY KEY, todoId TEXT NOT NULL REFERENCES todos(id) ON DELETE CASCADE, name TEXT NOT NULL, size INTEGER NOT NULL, createdAt TEXT NOT NULL, data BLOB NOT NULL)`,
+    `CREATE INDEX todo_attachments_task ON todo_attachments(todoId, createdAt)`,
   ]);
 
   function changed() {
@@ -231,13 +253,53 @@ export default async function plugin(bb: BbPluginApi) {
     return next;
   }
 
+  function requireTodo(id: string): Todo {
+    const todo = getTodo(id);
+    if (!todo) throw new Error("Задача не найдена");
+    return todo;
+  }
+  function details(id: string) {
+    return { todo: requireTodo(id),
+      comments: db.prepare("SELECT * FROM todo_comments WHERE todoId = ? ORDER BY createdAt, id").all(id) as Comment[],
+      attachments: db.prepare("SELECT id, todoId, name, size, createdAt FROM todo_attachments WHERE todoId = ? ORDER BY createdAt, id").all(id) as Attachment[] };
+  }
+  function addComment(input: {todoId: string; text: string}) {
+    const task = requireTodo(input.todoId);
+    if (task.notes || db.prepare("SELECT id FROM todo_comments WHERE todoId = ? LIMIT 1").get(input.todoId)) throw new Error("Заметка уже есть — отредактируйте её");
+    const item = { ...input, id: randomUUID(), createdAt: new Date().toISOString() };
+    db.prepare("INSERT INTO todo_comments (id, todoId, text, createdAt) VALUES (@id, @todoId, @text, @createdAt)").run(item);
+    changed(); return item;
+  }
+  function addAttachment(input: z.infer<typeof fileInput>) {
+    requireTodo(input.todoId);
+    const bytes = Buffer.from(input.data, "base64");
+    if (bytes.length > 5 * 1024 * 1024) throw new Error("Максимальный размер файла — 5 МБ");
+    const item = { id: randomUUID(), todoId: input.todoId, name: input.name, size: bytes.length, createdAt: new Date().toISOString() };
+    db.prepare("INSERT INTO todo_attachments (id, todoId, name, size, createdAt, data) VALUES (@id, @todoId, @name, @size, @createdAt, @data)").run({...item, data: bytes});
+    changed(); return item;
+  }
   function removeTodo(id: string): boolean {
-    const removed = db.prepare(`DELETE FROM todos WHERE id = ?`).run(id).changes > 0;
+    const removed = db.transaction(() => {
+      db.prepare("DELETE FROM todo_comments WHERE todoId = ?").run(id);
+      db.prepare("DELETE FROM todo_attachments WHERE todoId = ?").run(id);
+      return db.prepare("DELETE FROM todos WHERE id = ?").run(id).changes > 0;
+    })();
     if (removed) changed();
     return removed;
   }
 
   bb.rpc.register(rpcContract, {
+    todos_details: ({id}) => details(id),
+    comments_add: input => addComment(input),
+    comments_edit: ({id, text}) => { const ok = db.prepare("UPDATE todo_comments SET text = ? WHERE id = ?").run(text, id).changes > 0; changed(); return {ok}; },
+    comments_remove: ({id}) => { const ok = db.prepare("DELETE FROM todo_comments WHERE id = ?").run(id).changes > 0; changed(); return {ok}; },
+    attachments_add: input => addAttachment(input),
+    attachments_get: ({id}) => {
+      const row = db.prepare("SELECT name, data FROM todo_attachments WHERE id = ?").get(id) as {name: string; data: Buffer} | undefined;
+      if (!row) throw new Error("Файл не найден");
+      return {name: row.name, data: row.data.toString("base64")};
+    },
+    attachments_remove: ({id}) => { const ok = db.prepare("DELETE FROM todo_attachments WHERE id = ?").run(id).changes > 0; changed(); return {ok}; },
     todos_list: async () => ({ todos: listTodos() }),
     todos_add: (input) => addTodo(input),
     todos_update: async ({ id, ...patch }) => {
@@ -338,6 +400,10 @@ export default async function plugin(bb: BbPluginApi) {
       return formatList(listTodos(), { all: all === true });
     },
   });
+
+  bb.agents.registerTool({ name: "todo_details", description: "Read a task with its notes, comments and attachment metadata.", parameters: z.object({id: z.string()}), async execute({id}) { return JSON.stringify(details(id)); } });
+  bb.agents.registerTool({ name: "todo_comment", description: "Add a comment to an existing task.", parameters: z.object({todoId: z.string(), text: commentText}), async execute(input) { return JSON.stringify(addComment(input)); } });
+  bb.agents.registerTool({ name: "todo_attach", description: "Attach a file to a task using base64 data, up to 5 MiB.", parameters: fileInput, async execute(input) { return JSON.stringify(addAttachment(input)); } });
 
   // ---- `bb todo` CLI -------------------------------------------------------
 
