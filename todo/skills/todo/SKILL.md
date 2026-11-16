@@ -41,3 +41,12 @@ to which project.
 Add `--json` when output drives code. In list output `!!` is high, `·` normal,
 `··` low. Never guess an id: list first. Change the list only through these
 tools and commands, never through the plugin's database.
+
+## Task cards, comments and attachments
+
+Click any task title in the Todo page to edit notes, use clickable HTTP(S)
+links, manage dated comments and upload/download files (5 MiB maximum).
+`todo_details({id})` returns the full task, comments and attachment metadata.
+`todo_comment({todoId,text})` appends a comment without replacing the notes.
+`todo_attach({todoId,name,data})` stores base64 file content in the plugin DB.
+Only attach files the user requested. Never include file bytes in list output.
