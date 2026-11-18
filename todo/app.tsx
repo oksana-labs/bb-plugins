@@ -77,22 +77,37 @@ function TodoRow({
   onRemove,
 }: {
   todo: Todo;
-  onUpdate: (patch: { done?: boolean; priority?: Priority }) => void;
+  onUpdate: (patch: { title?: string; done?: boolean; priority?: Priority }) => Promise<boolean>;
   onRemove: () => void;
 }) {
   const navigate = useBbNavigate();
   const [open, setOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [draftTitle, setDraftTitle] = useState(todo.title);
+  const [savingTitle, setSavingTitle] = useState(false);
+  async function saveTitle(event: FormEvent) {
+    event.preventDefault();
+    if (!draftTitle.trim() || savingTitle) return;
+    setSavingTitle(true);
+    try { if (await onUpdate({title:draftTitle.trim()})) setEditingTitle(false); }
+    finally {setSavingTitle(false);}
+  }
   return <li className={cn("my-3 rounded-xl border border-border bg-card p-5 text-sm transition-colors", dragging && "ring-2 ring-primary bg-primary/5")}
     onDragOver={e => {e.preventDefault(); setDragging(true);setOpen(true);}}
     onDragLeave={e => {if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);}}
     onDrop={e => {e.preventDefault();setDragging(false); if (!(e.target as HTMLElement).closest('[aria-label="Карточка задачи"]')) window.dispatchEvent(new CustomEvent(`todo-files-${todo.id}`,{detail:Array.from(e.dataTransfer.files)}));}}>
     <div className="flex items-center gap-3">
       <Checkbox checked={todo.done} onCheckedChange={checked => onUpdate({done:checked === true})} aria-label={`${todo.done ? "Вернуть" : "Выполнить"} «${todo.title}»`}/>
-      <button className={cn("min-w-0 text-left flex-1 font-normal text-sm break-words",todo.done && "line-through text-muted-foreground")} onClick={() => setOpen(value => !value)}>{todo.title}</button>
+      {editingTitle ? <form onSubmit={saveTitle} className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+        <Input autoFocus aria-label="Название задачи" value={draftTitle} maxLength={300} disabled={savingTitle} onChange={e => setDraftTitle(e.target.value)} onKeyDown={e => {if(e.key === "Escape" && !savingTitle) setEditingTitle(false);}} className="min-w-32 flex-1"/>
+        <Button type="submit" disabled={savingTitle || !draftTitle.trim()}>Сохранить</Button>
+        <Button type="button" variant="ghost" disabled={savingTitle} onClick={() => setEditingTitle(false)}>Отмена</Button>
+      </form> : <button className={cn("min-w-0 text-left flex-1 font-normal text-sm break-words",todo.done && "line-through text-muted-foreground")} onClick={() => setOpen(value => !value)}>{todo.title}</button>}
       <button type="button" disabled={todo.done} aria-label={`Приоритет: ${PRIORITY_LABEL[todo.priority]}. Сменить`} title="Нажмите, чтобы сменить приоритет" onClick={() => onUpdate({priority:nextPriority(todo.priority)})} className="inline-flex shrink-0 items-center gap-2 rounded-full bg-muted px-2.5 py-1 text-xs disabled:opacity-60"><PriorityDot priority={todo.priority}/>{todo.done ? "Выполнено" : PRIORITY_LABEL[todo.priority]}</button>
       <Button variant="ghost" size="icon" aria-label={open ? "Свернуть задачу" : "Развернуть задачу"} aria-expanded={open} onClick={() => setOpen(value => !value)}><Icon name={open ? "ChevronUp" : "ChevronDown"} className="size-4"/></Button>
       <ActionMenu><summary aria-label="Действия задачи" className="list-none cursor-pointer px-2 text-lg text-muted-foreground">⋯</summary><div className="absolute right-0 z-20 min-w-40 rounded-md border bg-card p-1 shadow-md">
+        <Button variant="ghost" onClick={() => {setDraftTitle(todo.title);setEditingTitle(true);}}>Изменить</Button>
         <Button variant="ghost" disabled={todo.done} onClick={() => onUpdate({priority:nextPriority(todo.priority)})}>Приоритет: {PRIORITY_LABEL[todo.priority]}</Button>
         {todo.threadId && <Button variant="ghost" onClick={() => navigate.toThread(todo.threadId!)}>Открыть сессию</Button>}
         <Button variant="ghost" onClick={onRemove}>Удалить задачу</Button>
@@ -203,8 +218,8 @@ function TodosPage() {
     }
   };
 
-  const update = (id: string, patch: { done?: boolean; priority?: Priority }) => {
-    rpc.call("todos_update", { id, ...patch }).then(refetch, report);
+  const update = (id: string, patch: { title?: string; done?: boolean; priority?: Priority }) => {
+    return rpc.call("todos_update", { id, ...patch }).then(() => {refetch();return true;}, cause => {report(cause);return false;});
   };
   const remove = (id: string) => {
     rpc.call("todos_remove", { id }).then(refetch, report);

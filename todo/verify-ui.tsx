@@ -32,5 +32,11 @@ try {
  menu.open = true;
  fireEvent.keyDown(document,{key:'Escape'});
  assert.equal(menu.open,false);
+ menu.open = true;
+ fireEvent.click(Array.from(menu.querySelectorAll('button')).find(button => button.textContent === 'Изменить')!);
+ fireEvent.change(await slot.findByLabelText('Название задачи'),{target:{value:'Renamed task'}});
+ fireEvent.click(slot.getByText('Сохранить'));
+ await slot.findByText('Renamed task');
+ assert.equal(task.title,'Renamed task');
  console.log('PASS: expand card, removed description field, clickable links, add comment');
 } finally {slot.lifecycle.unmount();}
